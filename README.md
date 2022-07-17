@@ -1,5 +1,7 @@
 The best suckless configs of all time (we currently usin on the laptop)
 
+### BUG: MAKE SURE YOU EDIT THE MAKEFILE TO BE TABS INSTEAD OF 8 SPACES AT THE BEGGINING OF LINES BECAUSE GITHUB IS STUPID
+
 <h2> Requirements: </h2>
 
  - [bitmap-fonts](https://github.com/Tecate/bitmap-fonts)
