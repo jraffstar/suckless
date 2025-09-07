@@ -1,7 +1,4 @@
-The best suckless configs of all time (we currently usin on the laptop)
-
-# BUG: MAKE SURE YOU EDIT THE MAKEFILE TO BE TABS INSTEAD OF 8 SPACES AT THE BEGINING OF LINES BECAUSE GITHUB IS STUPID
-
+My configs for suckless software that I use on my machines
 <h2> Requirements: </h2>
 
  - [bitmap-fonts](https://github.com/Tecate/bitmap-fonts)
