@@ -1,1 +1,1 @@
-My configs for suckless software that I use on my machines
+My configs for suckless software that I use on my machine
