@@ -14,7 +14,6 @@
 #include <X11/keysym.h>
 #include <X11/Xft/Xft.h>
 #include <X11/XKBlib.h>
-#include <X11/Xresource.h>
 
 char *argv0;
 #include "arg.h"
@@ -45,19 +44,6 @@ typedef struct {
 	signed char appkey;    /* application keypad */
 	signed char appcursor; /* application cursor */
 } Key;
-
-/* Xresources preferences */
-enum resource_type {
-	STRING = 0,
-	INTEGER = 1,
-	FLOAT = 2
-};
-
-typedef struct {
-	char *name;
-	enum resource_type type;
-	void *dst;
-} ResourcePref;
 
 /* X modifiers */
 #define XK_ANY_MOD    UINT_MAX
@@ -120,6 +106,7 @@ typedef struct {
 	XSetWindowAttributes attrs;
 	int scr;
 	int isfixed; /* is fixed geometry? */
+	int depth; /* bit depth */
 	int l, t; /* left and top offset */
 	int gm; /* geometry mask */
 } XWindow;
@@ -258,6 +245,7 @@ static char *usedfont = NULL;
 static double usedfontsize = 0;
 static double defaultfontsize = 0;
 
+static char *opt_alpha = NULL;
 static char *opt_class = NULL;
 static char **opt_cmd  = NULL;
 static char *opt_embed = NULL;
@@ -267,7 +255,7 @@ static char *opt_line  = NULL;
 static char *opt_name  = NULL;
 static char *opt_title = NULL;
 
-static uint buttons; /* bit field of pressed buttons */
+static int oldbutton = 3; /* button event on startup: 3 = release */
 
 void
 clipcopy(const Arg *dummy)
@@ -379,68 +367,61 @@ mousesel(XEvent *e, int done)
 void
 mousereport(XEvent *e)
 {
-	int len, btn, code;
-	int x = evcol(e), y = evrow(e);
-	int state = e->xbutton.state;
+	int len, x = evcol(e), y = evrow(e),
+	    button = e->xbutton.button, state = e->xbutton.state;
 	char buf[40];
 	static int ox, oy;
 
-	if (e->type == MotionNotify) {
+	/* from urxvt */
+	if (e->xbutton.type == MotionNotify) {
 		if (x == ox && y == oy)
 			return;
 		if (!IS_SET(MODE_MOUSEMOTION) && !IS_SET(MODE_MOUSEMANY))
 			return;
-		/* MODE_MOUSEMOTION: no reporting if no button is pressed */
-		if (IS_SET(MODE_MOUSEMOTION) && buttons == 0)
+		/* MOUSE_MOTION: no reporting if no button is pressed */
+		if (IS_SET(MODE_MOUSEMOTION) && oldbutton == 3)
 			return;
-		/* Set btn to lowest-numbered pressed button, or 12 if no
-		 * buttons are pressed. */
-		for (btn = 1; btn <= 11 && !(buttons & (1<<(btn-1))); btn++)
-			;
-		code = 32;
+
+		button = oldbutton + 32;
+		ox = x;
+		oy = y;
 	} else {
-		btn = e->xbutton.button;
-		/* Only buttons 1 through 11 can be encoded */
-		if (btn < 1 || btn > 11)
-			return;
-		if (e->type == ButtonRelease) {
+		if (!IS_SET(MODE_MOUSESGR) && e->xbutton.type == ButtonRelease) {
+			button = 3;
+		} else {
+			button -= Button1;
+			if (button >= 7)
+				button += 128 - 7;
+			else if (button >= 3)
+				button += 64 - 3;
+		}
+		if (e->xbutton.type == ButtonPress) {
+			oldbutton = button;
+			ox = x;
+			oy = y;
+		} else if (e->xbutton.type == ButtonRelease) {
+			oldbutton = 3;
 			/* MODE_MOUSEX10: no button release reporting */
 			if (IS_SET(MODE_MOUSEX10))
 				return;
-			/* Don't send release events for the scroll wheel */
-			if (btn == 4 || btn == 5)
+			if (button == 64 || button == 65)
 				return;
 		}
-		code = 0;
 	}
 
-	ox = x;
-	oy = y;
-
-	/* Encode btn into code. If no button is pressed for a motion event in
-	 * MODE_MOUSEMANY, then encode it as a release. */
-	if ((!IS_SET(MODE_MOUSESGR) && e->type == ButtonRelease) || btn == 12)
-		code += 3;
-	else if (btn >= 8)
-		code += 128 + btn - 8;
-	else if (btn >= 4)
-		code += 64 + btn - 4;
-	else
-		code += btn - 1;
-
 	if (!IS_SET(MODE_MOUSEX10)) {
-		code += ((state & ShiftMask  ) ?  4 : 0)
-		      + ((state & Mod1Mask   ) ?  8 : 0) /* meta key: alt */
-		      + ((state & ControlMask) ? 16 : 0);
+		button += ((state & ShiftMask  ) ? 4  : 0)
+			+ ((state & Mod4Mask   ) ? 8  : 0)
+			+ ((state & ControlMask) ? 16 : 0);
 	}
 
 	if (IS_SET(MODE_MOUSESGR)) {
 		len = snprintf(buf, sizeof(buf), "\033[<%d;%d;%d%c",
-				code, x+1, y+1,
-				e->type == ButtonRelease ? 'm' : 'M');
+				button, x+1, y+1,
+				e->xbutton.type == ButtonRelease ? 'm' : 'M');
 	} else if (x < 223 && y < 223) {
 		len = snprintf(buf, sizeof(buf), "\033[M%c%c%c",
-				32+code, 32+x+1, 32+y+1);
+				32+button, 32+x+1, 32+y+1);
 	} else {
 		return;
 	}
@@ -483,12 +464,8 @@ mouseaction(XEvent *e, uint release)
 void
 bpress(XEvent *e)
 {
-	int btn = e->xbutton.button;
 	struct timespec now;
 	int snap;
-
-	if (1 <= btn && btn <= 11)
-		buttons |= 1 << (btn-1);
 
 	if (IS_SET(MODE_MOUSE) && !(e->xbutton.state & forcemousemod)) {
 		mousereport(e);
@@ -498,7 +475,7 @@ bpress(XEvent *e)
 	if (mouseaction(e, 0))
 		return;
 
-	if (btn == Button1) {
+	if (e->xbutton.button == Button1) {
 		/*
 		 * If the user clicks below predefined timeouts specific
 		 * snapping behaviour is exposed.
@@ -712,11 +689,6 @@ xsetsel(char *str)
 void
 brelease(XEvent *e)
 {
-	int btn = e->xbutton.button;
-
-	if (1 <= btn && btn <= 11)
-		buttons &= ~(1 << (btn-1));
-
 	if (IS_SET(MODE_MOUSE) && !(e->xbutton.state & forcemousemod)) {
 		mousereport(e);
 		return;
@@ -724,7 +696,7 @@ brelease(XEvent *e)
 
 	if (mouseaction(e, 1))
 		return;
-	if (btn == Button1)
+	if (e->xbutton.button == Button1)
 		mousesel(e, 1);
 }
 
@@ -770,7 +742,7 @@ xresize(int col, int row)
 
 	XFreePixmap(xw.dpy, xw.buf);
 	xw.buf = XCreatePixmap(xw.dpy, xw.win, win.w, win.h,
-			DefaultDepth(xw.dpy, xw.scr));
+			xw.depth);
 	XftDrawChange(xw.draw, xw.buf);
 	xclear(0, 0, win.w, win.h);
 
@@ -830,6 +802,13 @@ xloadcols(void)
 			else
 				die("could not allocate color %d\n", i);
 		}
+
+	/* set alpha value of bg color */
+	if (opt_alpha)
+		alpha = strtof(opt_alpha, NULL);
+	dc.col[defaultbg].color.alpha = (unsigned short)(0xffff * alpha);
+	dc.col[defaultbg].pixel &= 0x00FFFFFF;
+	dc.col[defaultbg].pixel |= (unsigned char)(0xff * alpha) << 24;
 	loaded = 1;
 }
 
@@ -877,8 +856,8 @@ xclear(int x1, int y1, int x2, int y2)
 void
 xhints(void)
 {
-	XClassHint class = {opt_name ? opt_name : "st",
-	                    opt_class ? opt_class : "St"};
+	XClassHint class = {opt_name ? opt_name : termname,
+	                    opt_class ? opt_class : termname};
 	XWMHints wm = {.flags = InputHint, .input = 1};
 	XSizeHints *sizeh;
 
@@ -1152,9 +1131,23 @@ xinit(int cols, int rows)
 	Window parent;
 	pid_t thispid = getpid();
 	XColor xmousefg, xmousebg;
+	XWindowAttributes attr;
+	XVisualInfo vis;
 
+	if (!(xw.dpy = XOpenDisplay(NULL)))
+		die("can't open display\n");
 	xw.scr = XDefaultScreen(xw.dpy);
-	xw.vis = XDefaultVisual(xw.dpy, xw.scr);
+
+	if (!(opt_embed && (parent = strtol(opt_embed, NULL, 0)))) {
+		parent = XRootWindow(xw.dpy, xw.scr);
+		xw.depth = 32;
+	} else {
+		XGetWindowAttributes(xw.dpy, parent, &attr);
+		xw.depth = attr.depth;
+	}
+
+	XMatchVisualInfo(xw.dpy, xw.scr, xw.depth, TrueColor, &vis);
+	xw.vis = vis.visual;
 
 	/* font */
 	if (!FcInit())
@@ -1164,7 +1157,7 @@ xinit(int cols, int rows)
 	xloadfonts(usedfont, 0);
 
 	/* colors */
-	xw.cmap = XDefaultColormap(xw.dpy, xw.scr);
+	xw.cmap = XCreateColormap(xw.dpy, parent, xw.vis, None);
 	xloadcols();
 
 	/* adjust fixed window geometry */
@@ -1184,19 +1177,15 @@ xinit(int cols, int rows)
 		| ButtonMotionMask | ButtonPressMask | ButtonReleaseMask;
 	xw.attrs.colormap = xw.cmap;
 
-	if (!(opt_embed && (parent = strtol(opt_embed, NULL, 0))))
-		parent = XRootWindow(xw.dpy, xw.scr);
 	xw.win = XCreateWindow(xw.dpy, parent, xw.l, xw.t,
-			win.w, win.h, 0, XDefaultDepth(xw.dpy, xw.scr), InputOutput,
+			win.w, win.h, 0, xw.depth, InputOutput,
 			xw.vis, CWBackPixel | CWBorderPixel | CWBitGravity
 			| CWEventMask | CWColormap, &xw.attrs);
 
 	memset(&gcvalues, 0, sizeof(gcvalues));
 	gcvalues.graphics_exposures = False;
-	dc.gc = XCreateGC(xw.dpy, parent, GCGraphicsExposures,
-			&gcvalues);
-	xw.buf = XCreatePixmap(xw.dpy, xw.win, win.w, win.h,
-			DefaultDepth(xw.dpy, xw.scr));
+	xw.buf = XCreatePixmap(xw.dpy, xw.win, win.w, win.h, xw.depth);
+	dc.gc = XCreateGC(xw.dpy, xw.buf, GCGraphicsExposures, &gcvalues);
 	XSetForeground(xw.dpy, dc.gc, dc.col[defaultbg].pixel);
 	XFillRectangle(xw.dpy, xw.buf, dc.gc, 0, 0, win.w, win.h);
 
@@ -1509,12 +1498,12 @@ xdrawglyphfontspecs(const XftGlyphFontSpec *specs, Glyph base, int len, int x, i
 
 	/* Render underline and strikethrough. */
 	if (base.mode & ATTR_UNDERLINE) {
-		XftDrawRect(xw.draw, fg, winx, winy + dc.font.ascent * chscale + 1,
+		XftDrawRect(xw.draw, fg, winx, winy + dc.font.ascent + 1,
 				width, 1);
 	}
 
 	if (base.mode & ATTR_STRUCK) {
-		XftDrawRect(xw.draw, fg, winx, winy + 2 * dc.font.ascent * chscale / 3,
+		XftDrawRect(xw.draw, fg, winx, winy + 2 * dc.font.ascent / 3,
 				width, 1);
 	}
 
@@ -2027,59 +2016,6 @@ run(void)
 	}
 }
 
-int
-resource_load(XrmDatabase db, char *name, enum resource_type rtype, void *dst)
-{
-	char **sdst = dst;
-	int *idst = dst;
-	float *fdst = dst;
-
-	char fullname[256];
-	char fullclass[256];
-	char *type;
-	XrmValue ret;
-
-	snprintf(fullname, sizeof(fullname), "%s.%s",
-			opt_name ? opt_name : "st", name);
-	snprintf(fullclass, sizeof(fullclass), "%s.%s",
-			opt_class ? opt_class : "St", name);
-	fullname[sizeof(fullname) - 1] = fullclass[sizeof(fullclass) - 1] = '\0';
-
-	XrmGetResource(db, fullname, fullclass, &type, &ret);
-	if (ret.addr == NULL || strncmp("String", type, 64))
-		return 1;
-
-	switch (rtype) {
-	case STRING:
-		*sdst = ret.addr;
-		break;
-	case INTEGER:
-		*idst = strtoul(ret.addr, NULL, 10);
-		break;
-	case FLOAT:
-		*fdst = strtof(ret.addr, NULL);
-		break;
-	}
-	return 0;
-}
-
-void
-config_init(void)
-{
-	char *resm;
-	XrmDatabase db;
-	ResourcePref *p;
-
-	XrmInitialize();
-	resm = XResourceManagerString(xw.dpy);
-	if (!resm)
-		return;
-
-	db = XrmGetStringDatabase(resm);
-	for (p = resources; p < resources + LEN(resources); p++)
-		resource_load(db, p->name, p->type, p->dst);
-}
-
 void
 usage(void)
 {
@@ -2103,6 +2039,9 @@ main(int argc, char *argv[])
 	ARGBEGIN {
 	case 'a':
 		allowaltscreen = 0;
+		break;
+	case 'A':
+		opt_alpha = EARGF(usage());
 		break;
 	case 'c':
 		opt_class = EARGF(usage());
@@ -2153,11 +2092,6 @@ run:
 
 	setlocale(LC_CTYPE, "");
 	XSetLocaleModifiers("");
-
-	if(!(xw.dpy = XOpenDisplay(NULL)))
-		die("Can't open display\n");
-
-	config_init();
 	cols = MAX(cols, 1);
 	rows = MAX(rows, 1);
 	tnew(cols, rows);
