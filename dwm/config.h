@@ -910,6 +910,7 @@ static const char *dmenucmd[] = {
 static const char *termcmd[]  = { "st", NULL };
 static const char *flameshotcmd[] = {"flameshot", "gui", NULL};
 static const char *roficmd[] = {"rofi", "-show", "drun", NULL};
+static const char *dolphincmd[] = {"dolphin", NULL};
 
 #if BAR_STATUSCMD_PATCH
 #if BAR_DWMBLOCKS_PATCH
@@ -1049,6 +1050,7 @@ static const Key keys[] = {
 	{ MODKEY,                       XK_p,          spawn,                  {.v = roficmd } },
 	{ MODKEY|ShiftMask,             XK_Return,     spawn,                  {.v = termcmd } },
 	{ MODKEY|ShiftMask,             XK_d,     	   spawn,                  {.v = flameshotcmd } },
+	{ MODKEY|ShiftMask,             XK_e,     	   spawn,                  {.v = dolphincmd } },
 	#if RIODRAW_PATCH
 	{ MODKEY|ControlMask,           XK_p,          riospawnsync,           {.v = dmenucmd } },
 	{ MODKEY|ControlMask,           XK_Return,     riospawn,               {.v = termcmd } },
