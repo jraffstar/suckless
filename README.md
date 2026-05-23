@@ -1,5 +1,3 @@
 My configs for suckless software that I use on my machine
 
-dependencies:
-- xinerama
-- xft
+<img src=rice.jpg>
